@@ -1,3 +1,4 @@
+import json
 import audit_agent
 
 
@@ -27,6 +28,13 @@ def test_prompt_for_cfo_approval_reads_user_decision():
     assert "Gujarat Steel Corp" in seen[0]
 
 
+def test_query_ledger_returns_schema_guidance_for_malformed_select():
+    result = json.loads(audit_agent.query_ledger("select p.Payment_Amount from Payments p"))
+
+    assert result["error"] == "Invalid SELECT for this ledger schema"
+    assert "Tables: Vendors, Invoices, Payments" in result["schema_hint"]
+
+
 def test_agent_builder_configures_interrupt(monkeypatch):
     calls = {}
 
@@ -39,3 +47,30 @@ def test_agent_builder_configures_interrupt(monkeypatch):
 
     assert calls["interrupt_on"] == {"request_cfo_approval": True}
     assert audit_agent.request_cfo_approval in calls["tools"]
+
+
+def test_invoke_agent_reports_cfo_interrupt(monkeypatch):
+    class EmptyMessage:
+        content = ""
+
+    class FakeAgent:
+        def invoke(self, _payload):
+            return {"messages": [EmptyMessage()], "__interrupt__": ("request_cfo_approval",)}
+
+    monkeypatch.setattr(audit_agent, "load_model_name", lambda: "test-model")
+    monkeypatch.setattr(audit_agent, "build_agent", lambda _model: FakeAgent())
+
+    result = audit_agent.invoke_agent("Audit the account for Gujarat Steel Corp.")
+
+    assert "CFO approval required" in result
+
+
+def test_build_augmented_prompt_includes_cfo_threshold_for_known_vendor():
+    prompt = audit_agent.build_augmented_prompt("Audit the account for Gujarat Steel Corp.")
+
+    assert "Gujarat Steel Corp" in prompt
+    assert "VEN-1000" in prompt
+    assert "DiscrepancyReport" in prompt
+    assert "penalty_amount_inr" in prompt
+    assert "request_cfo_approval" in prompt
+    assert "> INR 10000" in prompt
